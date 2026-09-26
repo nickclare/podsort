@@ -1,5 +1,6 @@
 pub mod dsl;
 
+use dsl::*;
 use regex::Regex;
 
 pub trait Matcher: std::fmt::Debug {
@@ -22,7 +23,7 @@ pub enum Field {
 }
 
 impl Field {
-    fn get_from_item<'a>(&'_ self, item: &'a rss::Item) -> Option<&'a str> {
+    pub(crate) fn get_from_item<'a>(&'_ self, item: &'a rss::Item) -> Option<&'a str> {
         match self {
             Field::Title => item.title(),
             Field::Description => item.description(),
@@ -52,67 +53,48 @@ impl Field {
     }
 }
 
-#[derive(Debug)]
-pub struct RegexMatcher {
-    field: Field,
-    pattern: Regex,
-}
-
-impl Matcher for RegexMatcher {
+impl Matcher for dsl::Filter {
     fn matches(&self, item: &rss::Item) -> bool {
-        if let Some(value) = self.field.get_from_item(item) {
-            self.pattern.is_match(value)
-        } else {
-            false
+        match self.expr.evaluate(item) {
+            dsl::Value::Bool(result) => result,
+            _ => unreachable!(),
         }
     }
 }
 
-#[derive(Debug)]
-pub struct ExactMatcher {
-    field: Field,
-    value: String,
-}
-
-impl Matcher for ExactMatcher {
-    fn matches(&self, item: &rss::Item) -> bool {
-        if let Some(value) = self.field.get_from_item(item) {
-            self.value == value
-        } else {
-            false
+impl Expr {
+    fn evaluate(&self, item: &rss::Item) -> Value {
+        match self {
+            dsl::Expr::Literal(value) => value.clone(),
+            dsl::Expr::Ident(field) => {
+                let typ = field.typ();
+                match field.get_from_item(item) {
+                    Some(value) => typ.parse_value(value).unwrap(),
+                    None => Value::None,
+                }
+            }
+            dsl::Expr::Comparison { lhs, op, rhs } => {
+                let lhs = lhs.evaluate(item);
+                let rhs = rhs.evaluate(item);
+                if lhs.is_none() || rhs.is_none() {
+                    Value::None
+                } else {
+                    op.evaluate(&lhs, &rhs)
+                }
+            }
+            dsl::Expr::And { lhs, rhs } => match (lhs.evaluate(item), rhs.evaluate(item)) {
+                (Value::Bool(l), Value::Bool(r)) => Value::Bool(l && r),
+                (_, _) => Value::None,
+            },
+            dsl::Expr::Or { lhs, rhs } => match (lhs.evaluate(item), rhs.evaluate(item)) {
+                (Value::Bool(l), Value::Bool(r)) => Value::Bool(l || r),
+                (_, _) => Value::None,
+            },
+            dsl::Expr::Not { expr } => match expr.evaluate(item) {
+                Value::Bool(value) => Value::Bool(!value),
+                _ => Value::None,
+            },
+            dsl::Expr::Id { expr } => expr.evaluate(item),
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct NotMatcher {
-    inner: Box<dyn Matcher>,
-}
-
-impl Matcher for NotMatcher {
-    fn matches(&self, item: &rss::Item) -> bool {
-        !self.inner.matches(item)
-    }
-}
-
-#[derive(Debug)]
-pub struct AndMatcher {
-    clauses: Vec<Box<dyn Matcher>>,
-}
-
-impl Matcher for AndMatcher {
-    fn matches(&self, item: &rss::Item) -> bool {
-        self.clauses.iter().all(|m| m.matches(item))
-    }
-}
-
-#[derive(Debug)]
-pub struct OrMatcher {
-    clauses: Vec<Box<dyn Matcher>>,
-}
-
-impl Matcher for OrMatcher {
-    fn matches(&self, item: &rss::Item) -> bool {
-        self.clauses.iter().any(|m| m.matches(item))
     }
 }

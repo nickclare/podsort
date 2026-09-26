@@ -2,7 +2,7 @@
 use super::*;
 use chumsky::input::{BorrowInput, MappedInput, StrInput, Stream, ValueInput};
 use chumsky::prelude::*;
-use color_eyre::eyre;
+use color_eyre::eyre::{self, Context, bail};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -11,17 +11,38 @@ pub enum Type {
     Int,
     String,
     Pattern,
+    None,
     Error,
 }
 
-trait Typed {
+impl Type {
+    pub fn parse_value(&self, input: &str) -> eyre::Result<Value> {
+        match self {
+            Type::Bool => match input {
+                "true" => Ok(Value::Bool(true)),
+                "false" => Ok(Value::Bool(false)),
+                _ => bail!("invalid boolean: {input}"),
+            },
+            Type::Int => {
+                let value = input.parse::<i64>().wrap_err("invalid integer: {input}")?;
+                Ok(Value::Int(value))
+            }
+            Type::String => Ok(Value::String(input.into())),
+            Type::Pattern => unreachable!(),
+            Type::None => Ok(Value::None),
+            Type::Error => bail!("can't parse anything as an 'error' type"),
+        }
+    }
+}
+
+pub(crate) trait Typed {
     fn typ(&self) -> Type;
 }
 
 #[derive(Debug)]
 pub struct Filter {
     // This must have ty == bool to be valid
-    expr: Expr,
+    pub(crate) expr: Expr,
 }
 
 impl Filter {
@@ -70,15 +91,29 @@ impl Typed for Field {
     }
 }
 
+#[inline(always)]
+fn typecheck_boolean_op(lhs: &Expr, rhs: &Expr) -> Type {
+    match (lhs.typ(), rhs.typ()) {
+        (Type::Bool, Type::Bool) => Type::Bool,
+        (_, _) => Type::Error,
+    }
+}
+
 impl Typed for Expr {
     fn typ(&self) -> Type {
         match self {
             Expr::Literal(value) => value.typ(),
             Expr::Ident(field) => field.typ(),
-            Expr::Comparison { .. } => Type::Bool,
-            Expr::And { .. } => Type::Bool,
-            Expr::Or { .. } => Type::Bool,
-            Expr::Not { .. } => Type::Bool,
+            Expr::Comparison { lhs, rhs, .. } => typecheck_boolean_op(lhs, rhs),
+            Expr::And { lhs, rhs, .. } => typecheck_boolean_op(lhs, rhs),
+            Expr::Or { lhs, rhs, .. } => typecheck_boolean_op(lhs, rhs),
+            Expr::Not { expr, .. } => {
+                if expr.typ() == Type::Bool {
+                    Type::Bool
+                } else {
+                    Type::Error
+                }
+            }
             Expr::Id { expr } => expr.typ(),
         }
     }
@@ -95,13 +130,58 @@ pub enum ComparisonOp {
     Like,
 }
 
-#[derive(Debug)]
+macro_rules! eq_op_impl {
+    ($lhs:ident $op:tt $rhs:ident) => {
+        match ($lhs, $rhs) {
+            (Value::Bool(lhs), Value::Bool(rhs)) => Value::Bool(lhs == rhs),
+            (Value::String(lhs), Value::String(rhs)) => Value::Bool(lhs == rhs),
+            (Value::Int(lhs), Value::Int(rhs)) => Value::Bool(lhs == rhs),
+            (_, _) => Value::None,
+        }
+    };
+}
+
+macro_rules! ord_op_impl {
+    ($lhs:ident $op:tt $rhs:ident) => {
+        match ($lhs, $rhs) {
+            (Value::String(l), Value::String(r)) => Value::Bool(l $op r),
+            (Value::Int(l), Value::Int(r)) => Value::Bool(l $op r),
+            (_, _) => Value::None,
+        }
+    }
+}
+
+impl ComparisonOp {
+    pub fn evaluate(&self, lhs: &Value, rhs: &Value) -> Value {
+        match self {
+            ComparisonOp::Eq => eq_op_impl!(lhs == rhs),
+            ComparisonOp::Neq => eq_op_impl!(lhs != rhs),
+            ComparisonOp::Lt => ord_op_impl!(lhs < rhs),
+            ComparisonOp::Leq => ord_op_impl!(lhs <= rhs),
+            ComparisonOp::Gt => ord_op_impl!(lhs > rhs),
+            ComparisonOp::Geq => ord_op_impl!(lhs >= rhs),
+            ComparisonOp::Like => match (lhs, rhs) {
+                (Value::String(s), Value::Pattern(pattern)) => Value::Bool(pattern.is_match(s)),
+                (_, _) => Value::None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Bool(bool),
     String(String),
     Int(i64),
     Pattern(regex::Regex),
     InvalidPattern(String, SimpleSpan),
+    None,
+}
+
+impl Value {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Value::None)
+    }
 }
 
 impl Typed for Value {
@@ -112,6 +192,7 @@ impl Typed for Value {
             Value::Int(_) => Type::Int,
             Value::Pattern(_) => Type::Pattern,
             Value::InvalidPattern(_, _) => Type::Error,
+            Value::None => Type::None,
         }
     }
 }
@@ -281,8 +362,10 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
+    #[test]
     fn test_parse_simple_expression() -> eyre::Result<()> {
-        bail!("{:?}", parse_expr(r#"summary like /no/ and season == 2"#))
+        let filter = Filter::from_expr(parse_expr(r#"Season > 2 and Title ~ /.*XL.*/"#).unwrap())?;
+
+        Ok(())
     }
 }
