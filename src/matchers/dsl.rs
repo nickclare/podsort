@@ -56,7 +56,7 @@ impl Filter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Literal(Value),
     Ident(Field),
@@ -99,12 +99,21 @@ fn typecheck_boolean_op(lhs: &Expr, rhs: &Expr) -> Type {
     }
 }
 
+#[inline(always)]
+fn typecheck_comparison_op(lhs: &Expr, op: ComparisonOp, rhs: &Expr) -> Type {
+    match (op, lhs.typ(), rhs.typ()) {
+        (ComparisonOp::Like, Type::String, Type::String | Type::Pattern) => Type::Bool,
+        (_, lt, rt) if lt == rt => Type::Bool,
+        (_, _, _) => Type::Error,
+    }
+}
+
 impl Typed for Expr {
     fn typ(&self) -> Type {
         match self {
             Expr::Literal(value) => value.typ(),
             Expr::Ident(field) => field.typ(),
-            Expr::Comparison { lhs, rhs, .. } => typecheck_boolean_op(lhs, rhs),
+            Expr::Comparison { lhs, rhs, op } => typecheck_comparison_op(lhs, *op, rhs),
             Expr::And { lhs, rhs, .. } => typecheck_boolean_op(lhs, rhs),
             Expr::Or { lhs, rhs, .. } => typecheck_boolean_op(lhs, rhs),
             Expr::Not { expr, .. } => {
@@ -323,7 +332,7 @@ pub fn parse_expr<'src>(input: &'src str) -> Result<Expr, Vec<ParseError<'src>>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use color_eyre::eyre::{self, bail};
+    use color_eyre::eyre::{self, WrapErr, bail};
     use indoc::indoc;
 
     #[test]
@@ -364,7 +373,10 @@ mod tests {
 
     #[test]
     fn test_parse_simple_expression() -> eyre::Result<()> {
-        let filter = Filter::from_expr(parse_expr(r#"Season > 2 and Title ~ /.*XL.*/"#).unwrap())?;
+        let expr = parse_expr(r#"season > 2 and description like /.*XL./"#)
+            .map_err(|e| eyre::eyre!("parse errors: {e:?}"))?;
+        dbg!(&expr);
+        let filter = Filter::from_expr(expr)?;
 
         Ok(())
     }

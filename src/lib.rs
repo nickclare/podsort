@@ -1,34 +1,88 @@
 #![deny(unsafe_code)]
 
-pub(crate) mod db;
 pub mod matchers;
 
-use matchers::Matcher;
+use matchers::dsl;
+use serde::{Deserialize, Deserializer, de::Visitor};
+use std::path::PathBuf;
+use url::Url;
 
-use std::io::BufRead;
+use crate::matchers::dsl::Expr;
 
-use color_eyre::eyre::{self, Context};
+#[derive(Debug, Clone, Deserialize)]
+pub struct Output {
+    pub id: String,
+    pub output: PathBuf,
 
-/// Sort a podcast stream into multiple streams, based on a set of `Matchers`
-pub struct PodcastSorter<'a> {
-    id: String,
-    channel: rss::Channel,
-    matchers: Vec<&'a dyn Matcher>,
+    #[serde(deserialize_with = "parse_matcher_expr")]
+    pub matcher: Box<Expr>,
 }
 
-impl<'a> PodcastSorter<'a> {
-    pub fn from_reader<I: Into<String>, S: BufRead>(id: I, input: S) -> eyre::Result<Self> {
-        let channel = rss::Channel::read_from(input).wrap_err("unable to parse input feed")?;
+#[doc(hidden)]
+fn parse_matcher_expr<'de, D>(deserializer: D) -> Result<Box<Expr>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct ExprVisitor;
+    impl<'de> Visitor<'de> for ExprVisitor {
+        type Value = Box<Expr>;
 
-        Ok(Self {
-            id: id.into(),
-            channel,
-            matchers: Vec::new(),
-        })
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(formatter, "expecting a matcher expression as a string")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            match dsl::parse_expr(v) {
+                Ok(expr) => Ok(Box::new(expr)),
+                Err(e) => Err(E::custom(format!(
+                    "failed to parse matcher expression: {e:?}"
+                ))),
+            }
+        }
     }
+    deserializer.deserialize_str(ExprVisitor)
+}
 
-    pub fn add_matcher(&mut self, matcher: &'a dyn Matcher) -> &mut Self {
-        self.matchers.push(matcher);
-        self
+#[derive(Debug, Clone, Deserialize)]
+pub struct PodcastJob {
+    pub id: String,
+    pub source: Url,
+
+    pub outputs: Vec<Output>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use color_eyre::eyre::{self};
+    use indoc::indoc;
+
+    #[test]
+    fn parse_basic_config() -> eyre::Result<()> {
+        let input = indoc! {r#"
+            id = "nstaaf"
+            source = "https://www.patreon.com/rss/ClubFish?auth=sFZNc9311B3MAd3pxzF76OHkkrzfEh0t&show=825827"
+            
+            [[outputs]]
+            id = "xl"
+            output = "/tmp/cfxl.rss"
+            matcher = "title like /XL/"
+        "#};
+
+        let job = toml::from_str::<PodcastJob>(input)?;
+        assert_eq!(job.outputs.len(), 1);
+        let output = job.outputs.first().unwrap();
+        assert!(matches!(
+            *output.matcher,
+            Expr::Comparison {
+                lhs: _,
+                op: dsl::ComparisonOp::Like,
+                rhs: _
+            }
+        ));
+        Ok(())
     }
 }
