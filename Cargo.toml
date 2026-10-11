@@ -1,0 +1,26 @@
+[package]
+name = "podsort"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.45"
+chumsky = { version = "0.13.0", features = ["pratt"] }
+clap = "4.6.6"
+color-eyre = "0.6.5"
+http = "1.5.0"
+iddqd = "0.5.0"
+indoc = "2.0.7"
+logos = "0.16.1"
+regex = "1.13.1"
+reqwest = { version = "0.13.4", features = ["json"] }
+rpkl = "0.8.0"
+rss = "2.1.0"
+rusqlite = { version = "0.40.2", features = ["chrono"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["full"] }
+toml = "1.1.4"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+url = { version = "2.5.8", features = ["serde"] }
