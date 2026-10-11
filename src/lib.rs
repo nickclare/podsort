@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 pub mod matchers;
+pub mod runner;
 
 use matchers::dsl;
 use serde::{Deserialize, Deserializer, de::Visitor};
@@ -64,12 +65,12 @@ mod tests {
     fn parse_basic_config() -> eyre::Result<()> {
         let input = indoc! {r#"
             id = "nstaaf"
-            source = "https://www.patreon.com/rss/ClubFish?auth=sFZNc9311B3MAd3pxzF76OHkkrzfEh0t&show=825827"
+            source = "https://audioboom.com/channels/2399216.rss"
             
             [[outputs]]
-            id = "xl"
-            output = "/tmp/cfxl.rss"
-            matcher = "title like /XL/"
+            id = "little-fish"
+            output = "/tmp/little-fish.rss"
+            matcher = "title like /Little Fish/"
         "#};
 
         let job = toml::from_str::<PodcastJob>(input)?;
